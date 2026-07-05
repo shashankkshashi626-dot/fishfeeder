@@ -1,17 +1,15 @@
 import React, { useState } from 'react';
 import { useAuth } from './AuthContext';
-import { useLocation, useNavigate } from 'react-router-dom';
 import { Fish, Settings, User, Edit2, Check, RefreshCw } from 'lucide-react';
 
 interface HeaderProps {
   espOnline: boolean | null;
   mqttConnected: boolean;
+  onSettingsClick: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ espOnline, mqttConnected }) => {
+export const Header: React.FC<HeaderProps> = ({ espOnline, mqttConnected, onSettingsClick }) => {
   const { user, updateAquariumName } = useAuth();
-  const navigate = useNavigate();
-  const location = useLocation();
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(user?.aquariumName || 'My Aquarium');
 
@@ -21,8 +19,6 @@ export const Header: React.FC<HeaderProps> = ({ espOnline, mqttConnected }) => {
       setIsEditing(false);
     }
   };
-
-  const isSettings = location.pathname === '/settings';
 
   return (
     <header className="flex justify-between items-center py-4 px-6 border-b border-slate-200/60 dark:border-slate-800/40 backdrop-blur-xl sticky top-0 z-40 bg-white/70 dark:bg-slate-950/65 transition-colors duration-300">
@@ -96,12 +92,8 @@ export const Header: React.FC<HeaderProps> = ({ espOnline, mqttConnected }) => {
 
         {/* Settings Toggle */}
         <button
-          onClick={() => navigate('/settings')}
-          className={`w-9 h-9 rounded-xl flex items-center justify-center border transition-all duration-200 ${
-            isSettings 
-              ? 'border-cyan-500 bg-cyan-500/10 text-cyan-400' 
-              : 'border-slate-200 dark:border-slate-800 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-900'
-          }`}
+          onClick={onSettingsClick}
+          className="w-9 h-9 rounded-xl flex items-center justify-center border transition-all duration-200 border-slate-200 dark:border-slate-800 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-900"
           aria-label="Settings"
         >
           <Settings className="w-4.5 h-4.5" />
@@ -109,7 +101,7 @@ export const Header: React.FC<HeaderProps> = ({ espOnline, mqttConnected }) => {
 
         {/* Profile / Account Toggle */}
         <button
-          onClick={() => navigate('/settings#account')}
+          onClick={onSettingsClick}
           className="w-9 h-9 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 flex items-center justify-center hover:opacity-85 transition-opacity"
           aria-label="Account Profile"
         >

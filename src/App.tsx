@@ -12,16 +12,17 @@ import Register from "./components/Register";
 import ForgotPassword from "./components/ForgotPassword";
 import Dashboard from "./components/Dashboard";
 import AutoFeed from "./components/AutoFeed";
-import Settings from "./components/Settings";
 
 // Components
 import Header from "./components/Header";
 import Footer from "./components/Footer";
+import { SettingsModal } from "./components/SettingsModal";
 
 export const App: React.FC = () => {
   const { user, loading } = useAuth();
   const location = useLocation();
   const [showSplash, setShowSplash] = useState(true);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Initialize MQTT Hook State
   const mqttState = useMQTT();
@@ -78,6 +79,7 @@ export const App: React.FC = () => {
         <Header 
           espOnline={mqttState.espOnline} 
           mqttConnected={mqttState.mqttConnected} 
+          onSettingsClick={() => setShowSettings(true)}
         />
       )}
 
@@ -127,13 +129,6 @@ export const App: React.FC = () => {
                 </PageWrapper>
               </ProtectedRoute>
             } />
-            <Route path="/settings" element={
-              <ProtectedRoute>
-                <PageWrapper>
-                  <Settings />
-                </PageWrapper>
-              </ProtectedRoute>
-            } />
 
             {/* Catch-all Redirect */}
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
@@ -141,6 +136,9 @@ export const App: React.FC = () => {
           </Routes>
         </AnimatePresence>
       </div>
+
+      {/* Global Settings Modal Overlay */}
+      <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
 
       {/* Show footer only if user is logged in and not on auth screens */}
       {user && !isAuthRoute && <Footer />}

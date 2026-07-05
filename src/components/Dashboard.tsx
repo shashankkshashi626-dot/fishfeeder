@@ -1,29 +1,24 @@
-import React, { useState } from "react";
-import { useAuth } from "./AuthContext";
-import { useMQTT } from "../hooks/useMQTT";
-import { Plus, LayoutGrid, Calendar } from "lucide-react";
-import { useNavigate } from "react-router-dom";
-
-// Custom Widgets
-import WidgetContainer from "./Widgets/WidgetContainer";
-import ServoWidget from "./Widgets/ServoWidget";
-import SensorWidget from "./Widgets/SensorWidget";
-import FeedButton from "./FeedButton";
-import WidgetSelector from "./WidgetSelector";
-import { BluetoothSetupCard } from "./BluetoothSetupCard";
+import React from 'react';
+import { ConnectionCard } from './ConnectionCard';
+import { EspCard } from './EspCard';
+import { ServoCard } from './ServoCard';
+import { FeedButton } from './FeedButton';
+import { SensorCard } from './SensorCard';
+import { ActivityCard } from './ActivityCard';
+import { BluetoothSetupCard } from './BluetoothSetupCard';
+import { Camera, Calendar, BarChart3, Scan, Lock } from 'lucide-react';
+import { useMQTT } from '../hooks/useMQTT';
 
 interface DashboardProps {
   mqttState: ReturnType<typeof useMQTT>;
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ mqttState }) => {
-  const { user, updateLayout } = useAuth();
-  const navigate = useNavigate();
-  const [showSelector, setShowSelector] = useState(false);
-
   const {
     mqttConnected,
+    mqttError,
     espOnline,
+    wifiRssi,
     servoStatus,
     lastFeedTime,
     feedCount,
@@ -31,190 +26,115 @@ export const Dashboard: React.FC<DashboardProps> = ({ mqttState }) => {
     waterTemp,
     waterLevel,
     batteryVoltage,
-    feedNow,
+    powerSource,
+    activityLog,
+    feedNow
   } = mqttState;
 
-  // Read layout from user profile, fall back to default if empty
-  const widgets = user?.layout || [
-    { id: "widget-feed", type: "feed", size: "lg" as const },
-    { id: "widget-counter", type: "counter", size: "sm" as const },
-    { id: "widget-temp", type: "temp", size: "sm" as const },
-    { id: "widget-food", type: "food", size: "md" as const },
-    { id: "widget-water", type: "water_level", size: "md" as const },
-  ];
-
-  // Helper: Save widgets state to Firestore / User record
-  const saveLayout = async (newWidgets: typeof widgets) => {
-    await updateLayout(newWidgets);
-  };
-
-  // Handler: Add new widget
-  const handleAddWidget = (type: string) => {
-    const id = `widget-${type}-${Date.now()}`;
-    // Determine default size depending on widget type
-    const size = (type === "feed" || type === "servo") ? "lg" as const : (type === "food" || type === "water_level") ? "md" as const : "sm" as const;
-    const updated = [...widgets, { id, type, size }];
-    saveLayout(updated);
-  };
-
-  // Handler: Delete widget
-  const handleDeleteWidget = (id: string) => {
-    const updated = widgets.filter(w => w.id !== id);
-    saveLayout(updated);
-  };
-
-  // Handler: Resize widget
-  const handleResizeWidget = (id: string) => {
-    const updated = widgets.map(w => {
-      if (w.id === id) {
-        const nextSize = w.size === "sm" ? ("md" as const) : w.size === "md" ? ("lg" as const) : ("sm" as const);
-        return { ...w, size: nextSize };
-      }
-      return w;
-    });
-    saveLayout(updated);
-  };
-
-  // Handler: Reorder widgets (move up/down)
-  const handleMoveWidget = (index: number, direction: "up" | "down") => {
-    const targetIndex = direction === "up" ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= widgets.length) return;
-
-    const updated = [...widgets];
-    const temp = updated[index];
-    updated[index] = updated[targetIndex];
-    updated[targetIndex] = temp;
-    saveLayout(updated);
-  };
-
   return (
-    <main className="flex-1 p-6 md:p-8 space-y-6 bg-slate-50/40 dark:bg-slate-950/20 transition-colors duration-300 relative min-h-screen">
+    <main className="flex-1 p-6 md:p-8 space-y-6 bg-slate-50/40 dark:bg-slate-950/20 transition-colors duration-300">
       
-      {/* Dynamic Sub Header */}
-      <div className="flex justify-between items-center pb-2">
-        <div>
-          <h2 className="text-xl font-black text-slate-800 dark:text-white flex items-center gap-2">
-            <LayoutGrid className="w-5 h-5 text-cyan-400" />
-            Control Dashboard
-          </h2>
-          <p className="text-xs text-slate-400 dark:text-slate-500 font-semibold leading-normal">
-            Arrange, resize, and configure monitoring widgets for your aquarium.
-          </p>
-        </div>
-
-        {/* Secondary Navigation Menu */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => navigate("/auto-feed")}
-            className="flex items-center gap-1.5 px-4 py-2 text-xs font-extrabold uppercase tracking-wider bg-gradient-to-tr from-cyan-400 to-blue-500 text-white rounded-xl shadow-md shadow-cyan-500/20 active:scale-95 transition-all"
-          >
-            <Calendar className="w-4 h-4" /> Auto Feed
-          </button>
-        </div>
-      </div>
-
-      {/* Warning banner when MQTT server is disconnected */}
+      {/* 1. Global Red Warning Banner (MQTT Disconnected) */}
       {!mqttConnected && (
-        <div className="w-full flex items-center justify-between p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-400 shadow-md">
+        <div className="w-full flex items-center justify-between p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-400 shadow-md animate-pulse">
           <div className="flex items-center gap-3">
             <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping shrink-0" />
-            <p className="text-xs font-bold uppercase tracking-wider leading-none">
-              MQTT Disconnected · Automatic retry active...
-            </p>
+            <div>
+              <p className="text-xs font-extrabold uppercase tracking-widest leading-none">Broker Connection Offline</p>
+              <p className="text-[10px] font-semibold mt-1 opacity-80 leading-normal">The dashboard has disconnected from HiveMQ. Feeding commands and telemetry updates are paused.</p>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Bluetooth Device Setup Card */}
+      {/* 2. System Status Grid */}
+      <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <ConnectionCard connected={mqttConnected} error={mqttError} />
+        <EspCard espOnline={espOnline} rssi={wifiRssi} />
+        <ServoCard status={servoStatus} lastFeedTime={lastFeedTime} feedCount={feedCount} espOnline={espOnline} />
+      </section>
+
+      {/* 3. Bluetooth Device Setup Card */}
       <BluetoothSetupCard />
 
-      {/* Grid of Draggable and Resizable Widgets */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        {widgets.map((widget, index) => {
-          const title = 
-            widget.type === "feed" ? "Interactive Feeding"
-            : widget.type === "servo" ? "Dispenser Status"
-            : widget.type === "food" ? "Food Levels"
-            : widget.type === "temp" ? "Aquarium Temp"
-            : widget.type === "water_level" ? "Water Sensors"
-            : widget.type === "counter" ? "Telemetry Log"
-            : widget.type === "last_feed" ? "Time Elapsed"
-            : widget.type === "battery" ? "Power Supply"
-            : "Metric Info";
-
-          return (
-            <WidgetContainer
-              key={widget.id}
-              id={widget.id}
-              size={widget.size}
-              type={widget.type}
-              title={title}
-              onDelete={() => handleDeleteWidget(widget.id)}
-              onResize={() => handleResizeWidget(widget.id)}
-              onMoveUp={index > 0 ? () => handleMoveWidget(index, "up") : undefined}
-              onMoveDown={index < widgets.length - 1 ? () => handleMoveWidget(index, "down") : undefined}
-            >
-              {widget.type === "feed" && (
-                <FeedButton
-                  mqttConnected={mqttConnected}
-                  espOnline={espOnline}
-                  servoStatus={servoStatus}
-                  onFeedClick={feedNow}
-                />
-              )}
-
-              {widget.type === "servo" && (
-                <ServoWidget
-                  status={servoStatus}
-                  espOnline={espOnline}
-                />
-              )}
-
-              {widget.type !== "feed" && widget.type !== "servo" && (
-                <SensorWidget
-                  type={widget.type as any}
-                  foodLevel={foodLevel}
-                  waterTemp={waterTemp}
-                  waterLevel={waterLevel}
-                  feedCount={feedCount}
-                  lastFeedTime={lastFeedTime}
-                  batteryVoltage={batteryVoltage}
-                  espOnline={espOnline}
-                />
-              )}
-            </WidgetContainer>
-          );
-        })}
-      </div>
-
-      {/* Empty State Layout Placeholder */}
-      {widgets.length === 0 && (
-        <div className="flex flex-col items-center justify-center p-12 text-center border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-3xl min-h-[300px]">
-          <LayoutGrid className="w-12 h-12 text-slate-300 dark:text-slate-700 mb-3" />
-          <h3 className="text-sm font-bold text-slate-600 dark:text-slate-300">No active widgets</h3>
-          <p className="text-xs text-slate-400 max-w-xs mt-1">
-            Tap the floating "+" button at the bottom right to start customizing your dashboard.
-          </p>
+      {/* 4. Action Control & Sensor Dashboard Grid */}
+      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Left Column: Feed Trigger Panel */}
+        <div className="lg:col-span-5 h-full">
+          <FeedButton 
+            mqttConnected={mqttConnected} 
+            espOnline={espOnline} 
+            servoStatus={servoStatus} 
+            onFeedClick={feedNow} 
+          />
         </div>
-      )}
 
-      {/* Floating Add Widget Action Button (FAB) */}
-      <button
-        onClick={() => setShowSelector(true)}
-        className="fixed bottom-8 right-8 w-14 h-14 rounded-full bg-gradient-to-tr from-cyan-400 to-blue-500 hover:from-cyan-300 hover:to-blue-400 text-white flex items-center justify-center shadow-xl shadow-cyan-500/25 active:scale-95 hover:scale-105 transition-all z-40 border border-cyan-300/20"
-        aria-label="Add dashboard widget"
-      >
-        <Plus className="w-7 h-7" />
-      </button>
+        {/* Right Column: Sensor Metrics */}
+        <div className="lg:col-span-7 h-full">
+          <SensorCard 
+            foodLevel={foodLevel} 
+            waterTemp={waterTemp} 
+            waterLevel={waterLevel} 
+            batteryVoltage={batteryVoltage} 
+            powerSource={powerSource} 
+            espOnline={espOnline}
+          />
+        </div>
+      </section>
 
-      {/* Add Widget Selector Overlay */}
-      {showSelector && (
-        <WidgetSelector
-          onClose={() => setShowSelector(false)}
-          onAddWidget={handleAddWidget}
-          currentWidgets={widgets}
-        />
-      )}
+      {/* 5. Activity Log and Future Cards */}
+      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Activity Ledger Column */}
+        <div className="lg:col-span-7">
+          <ActivityCard activityLog={activityLog} />
+        </div>
+
+        {/* Future Expansion Coming Soon Column */}
+        <div className="lg:col-span-5 flex flex-col gap-5">
+          <div className="rounded-3xl border border-slate-200/80 dark:border-slate-800/40 bg-white/40 dark:bg-slate-900/30 p-6 backdrop-blur-xl shadow-xl flex-1">
+            <h3 className="text-sm font-bold text-slate-800 dark:text-white mb-4 flex items-center gap-2">
+              <span>Future Modules</span>
+              <span className="text-[10px] bg-cyan-100 dark:bg-cyan-950 text-cyan-600 dark:text-cyan-400 px-2 py-0.5 rounded-full uppercase tracking-wider font-extrabold">Roadmap</span>
+            </h3>
+            
+            <div className="grid grid-cols-2 gap-4">
+              
+              {/* Camera */}
+              <div className="p-3.5 rounded-2xl bg-slate-100/50 dark:bg-slate-900/30 border border-slate-200/50 dark:border-slate-800/50 flex flex-col items-center justify-center text-center gap-1.5 relative group opacity-60">
+                <Lock className="w-4 h-4 text-slate-400 absolute top-3 right-3" />
+                <Camera className="w-6 h-6 text-slate-400 group-hover:text-cyan-500 transition-colors" />
+                <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300">Live Camera</span>
+                <span className="text-[8px] uppercase tracking-wider text-slate-400 font-bold">Coming Soon</span>
+              </div>
+
+              {/* Automatic Schedule */}
+              <div className="p-3.5 rounded-2xl bg-slate-100/50 dark:bg-slate-900/30 border border-slate-200/50 dark:border-slate-800/50 flex flex-col items-center justify-center text-center gap-1.5 relative group opacity-60">
+                <Lock className="w-4 h-4 text-slate-400 absolute top-3 right-3" />
+                <Calendar className="w-6 h-6 text-slate-400 group-hover:text-cyan-500 transition-colors" />
+                <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300">AI Scheduler</span>
+                <span className="text-[8px] uppercase tracking-wider text-slate-400 font-bold">Coming Soon</span>
+              </div>
+
+              {/* AI Fish Detection */}
+              <div className="p-3.5 rounded-2xl bg-slate-100/50 dark:bg-slate-900/30 border border-slate-200/50 dark:border-slate-800/50 flex flex-col items-center justify-center text-center gap-1.5 relative group opacity-60">
+                <Lock className="w-4 h-4 text-slate-400 absolute top-3 right-3" />
+                <Scan className="w-6 h-6 text-slate-400 group-hover:text-cyan-500 transition-colors" />
+                <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300">Fish Biometrics</span>
+                <span className="text-[8px] uppercase tracking-wider text-slate-400 font-bold">Coming Soon</span>
+              </div>
+
+              {/* Feeding Analytics */}
+              <div className="p-3.5 rounded-2xl bg-slate-100/50 dark:bg-slate-900/30 border border-slate-200/50 dark:border-slate-800/50 flex flex-col items-center justify-center text-center gap-1.5 relative group opacity-60">
+                <Lock className="w-4 h-4 text-slate-400 absolute top-3 right-3" />
+                <BarChart3 className="w-6 h-6 text-slate-400 group-hover:text-cyan-500 transition-colors" />
+                <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300">Analytics Insights</span>
+                <span className="text-[8px] uppercase tracking-wider text-slate-400 font-bold">Coming Soon</span>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </section>
 
     </main>
   );
