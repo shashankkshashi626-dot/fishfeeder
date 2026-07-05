@@ -132,18 +132,30 @@ void loop() {
 void connectWiFi() {
   Serial.print("Connecting to Wi-Fi: ");
   Serial.println(ssid);
+  
+  // Disconnect first to reset any ongoing connection attempt state
+  WiFi.disconnect();
+  delay(500);
+  
   WiFi.begin(ssid, password);
 
-  while (WiFi.status() != WL_CONNECTED) {
+  int retries = 0;
+  while (WiFi.status() != WL_CONNECTED && retries < 30) { // 15-second timeout
     delay(500);
     Serial.print(".");
     digitalWrite(STATUS_LED, !digitalRead(STATUS_LED)); // Blink LED while connecting
+    retries++;
   }
   
-  digitalWrite(STATUS_LED, HIGH); // LED stays on when Wi-Fi is connected
-  Serial.println("\nWi-Fi connection established!");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
+  if (WiFi.status() == WL_CONNECTED) {
+    digitalWrite(STATUS_LED, HIGH); // LED stays on when Wi-Fi is connected
+    Serial.println("\nWi-Fi connection established!");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    digitalWrite(STATUS_LED, LOW);
+    Serial.println("\nWi-Fi connection timeout! Will retry in next loop cycle.");
+  }
 }
 
 // ==========================================
