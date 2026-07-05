@@ -51,7 +51,7 @@
 #define BLE_SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define BLE_CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 #define BLE_DEVICE_NAME         "OhmNest"
-#define BLE_TIMEOUT_MS          60000   // BLE advertises for 60 seconds after boot
+#define BLE_TIMEOUT_MS          30000   // BLE advertises for 30 seconds after trigger
 
 // ==========================================
 // PREFERENCES (FLASH STORAGE) NAMESPACE
@@ -66,7 +66,7 @@
 #define DEFAULT_WIFIPASS   "Act@2026*"
 #define DEFAULT_MQTT_HOST  "0996b9bcc0b44d5599eaaf687e45ea8e.s1.eu.hivemq.cloud"
 #define DEFAULT_MQTT_USER  "fishuser"
-#define DEFAULT_MQTT_PASS  "Fish@123456"
+#define DEFAULT_MQTT_PASS  "Fishpass1234"
 
 // Active credential buffers (loaded from flash at boot)
 char cfg_ssid[64];
@@ -89,6 +89,8 @@ const int   mqtt_port          = 8883;
 #define WATER_LVL_PIN  33
 #define FOOD_LVL_PIN   34
 #define BATT_SENSE     35
+#define TOUCH_PIN      12   // Capacitive Touch 5 is GPIO 12
+#define TOUCH_THRESHOLD 40  // Capacitive threshold (untouched ~70, touched < 30)
 
 // Hardware instances
 WiFiClientSecure netClient;
@@ -102,7 +104,11 @@ Preferences      prefs;
 BLEServer*         pServer         = nullptr;
 BLECharacteristic* pCharacteristic = nullptr;
 bool               bleActive       = false;
+bool               bleClientConnected = false;
 unsigned long      bleStartTime    = 0;
+
+// WiFi/MQTT deferred init flag
+bool               wifiMqttReady   = false;
 
 // Session metrics
 int           todayFeedCount      = 0;
@@ -124,6 +130,12 @@ void loadCredentials() {
   String s_mpass = prefs.getString("mqttPass",  DEFAULT_MQTT_PASS);
   prefs.end();
 
+  s_ssid.trim();
+  s_pass.trim();
+  s_host.trim();
+  s_user.trim();
+  s_mpass.trim();
+
   s_ssid.toCharArray(cfg_ssid,      sizeof(cfg_ssid));
   s_pass.toCharArray(cfg_wifipass,  sizeof(cfg_wifipass));
   s_host.toCharArray(cfg_mqtt_host, sizeof(cfg_mqtt_host));
@@ -141,7 +153,7 @@ void loadCredentials() {
 // ==========================================
 class ProvisionCallback : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* pChar) override {
-    std::string raw = pChar->getValue();
+    String raw = pChar->getValue();
     if (raw.length() == 0) return;
 
     Serial.printf("\n[BLE Rx] Received %d bytes\n", raw.length());
@@ -163,23 +175,33 @@ class ProvisionCallback : public BLECharacteristicCallbacks {
     bool saved = false;
 
     if (doc.containsKey("ssid") && strlen(doc["ssid"]) > 0) {
-      prefs.putString("ssid", doc["ssid"].as<const char*>());
+      String val = doc["ssid"].as<String>();
+      val.trim();
+      prefs.putString("ssid", val);
       saved = true;
     }
     if (doc.containsKey("wifipass")) {
-      prefs.putString("wifipass", doc["wifipass"].as<const char*>());
+      String val = doc["wifipass"].as<String>();
+      val.trim();
+      prefs.putString("wifipass", val);
       saved = true;
     }
     if (doc.containsKey("mqttHost") && strlen(doc["mqttHost"]) > 0) {
-      prefs.putString("mqttHost", doc["mqttHost"].as<const char*>());
+      String val = doc["mqttHost"].as<String>();
+      val.trim();
+      prefs.putString("mqttHost", val);
       saved = true;
     }
     if (doc.containsKey("mqttUser")) {
-      prefs.putString("mqttUser", doc["mqttUser"].as<const char*>());
+      String val = doc["mqttUser"].as<String>();
+      val.trim();
+      prefs.putString("mqttUser", val);
       saved = true;
     }
     if (doc.containsKey("mqttPass")) {
-      prefs.putString("mqttPass", doc["mqttPass"].as<const char*>());
+      String val = doc["mqttPass"].as<String>();
+      val.trim();
+      prefs.putString("mqttPass", val);
       saved = true;
     }
     prefs.end();
@@ -198,18 +220,38 @@ class ProvisionCallback : public BLECharacteristicCallbacks {
 };
 
 // ==========================================
-// BLE SERVER — starts advertising "FeedMe-Setup"
+// BLE SERVER CONNECTION CALLBACKS
+// ==========================================
+class ServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) override {
+    bleClientConnected = true;
+    Serial.println("[BLE] Client connected");
+  }
+  void onDisconnect(BLEServer* pServer) override {
+    bleClientConnected = false;
+    Serial.println("[BLE] Client disconnected");
+    // Re-advertise so client can reconnect if needed
+    if (bleActive) {
+      BLEDevice::startAdvertising();
+    }
+  }
+};
+
+// ==========================================
+// BLE SERVER — starts advertising
 // ==========================================
 void startBLE() {
   BLEDevice::init(BLE_DEVICE_NAME);
   BLEDevice::setMTU(512);
 
   pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new ServerCallbacks());
 
   BLEService* pService = pServer->createService(BLE_SERVICE_UUID);
 
   pCharacteristic = pService->createCharacteristic(
     BLE_CHARACTERISTIC_UUID,
+    BLECharacteristic::PROPERTY_READ  |
     BLECharacteristic::PROPERTY_WRITE |
     BLECharacteristic::PROPERTY_NOTIFY
   );
@@ -235,12 +277,19 @@ void startBLE() {
 // ==========================================
 // BLE TIMEOUT CHECK — stops BLE after 60s to save power
 // ==========================================
+void stopBLE() {
+  if (!bleActive) return;
+  BLEDevice::stopAdvertising();
+  BLEDevice::deinit(true);  // fully release BLE radio for WiFi
+  bleActive = false;
+  bleClientConnected = false;
+  Serial.println("[BLE] Stopped and radio released for WiFi.");
+}
+
 void checkBLETimeout() {
-  if (bleActive && (millis() - bleStartTime > BLE_TIMEOUT_MS)) {
-    BLEDevice::stopAdvertising();
-    bleActive = false;
-    Serial.println("[BLE] Advertising timeout. BLE stopped to save power.");
-    Serial.println("[BLE] Restart ESP32 to enable BLE provisioning again.");
+  if (bleActive && !bleClientConnected && (millis() - bleStartTime > BLE_TIMEOUT_MS)) {
+    Serial.println("[BLE] Advertising timeout. Switching to WiFi mode.");
+    stopBLE();
   }
 }
 
@@ -250,6 +299,7 @@ void checkBLETimeout() {
 void connectWiFi() {
   Serial.printf("\n[WiFi] Connecting to: %s\n", cfg_ssid);
 
+  WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   delay(500);
   WiFi.begin(cfg_ssid, cfg_wifipass);
@@ -387,12 +437,63 @@ void publishTelemetry() {
 }
 
 // ==========================================
+// TOUCH SENSOR TRIGGER CHECK
+// ==========================================
+bool checkTouchTrigger() {
+  int touchVal = touchRead(TOUCH_PIN);
+  if (touchVal < TOUCH_THRESHOLD) {
+    delay(50); // debounce
+    touchVal = touchRead(TOUCH_PIN);
+    if (touchVal < TOUCH_THRESHOLD) {
+      Serial.printf("[Touch] Triggered! Value: %d (Threshold: %d)\n", touchVal, TOUCH_THRESHOLD);
+      return true;
+    }
+  }
+  return false;
+}
+
+void startBLEMode() {
+  Serial.println("\n[Touch] Activating BLE provisioning mode...");
+  digitalWrite(STATUS_LED, LOW);
+  
+  // 1. Disconnect WiFi and MQTT to free radio
+  mqttClient.disconnect();
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  delay(300);
+
+  // 2. Start BLE advertising
+  startBLE();
+  wifiMqttReady = false; // Reset WiFi ready flag so it can be re-inited later
+}
+
+// ==========================================
+// START WIFI + MQTT
+// ==========================================
+void initWiFiAndMQTT() {
+  if (wifiMqttReady) return;
+
+  Serial.println("\n[Init] Starting WiFi + MQTT...");
+  connectWiFi();
+
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  Serial.println("[NTP] Synchronizing RTC with time server...");
+
+  netClient.setInsecure(); // Use setCACert() for production security
+  mqttClient.setServer(cfg_mqtt_host, mqtt_port);
+  mqttClient.setCallback(mqttMessageReceived);
+  connectMQTT();
+
+  wifiMqttReady = true;
+}
+
+// ==========================================
 // SETUP ENTRYPOINT
 // ==========================================
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  Serial.println("\n=== FishFeeder v2.0 + BLE Provisioning ===");
+  Serial.println("\n=== FishFeeder v2.0 + Touch BLE Setup ===");
 
   // Hardware init
   pinMode(STATUS_LED,    OUTPUT);
@@ -401,32 +502,37 @@ void setup() {
   digitalWrite(STATUS_LED, LOW);
   tempSensors.begin();
 
-  // Step 1: Load credentials from flash (or defaults)
+  // Load credentials from NVS
   loadCredentials();
 
-  // Step 2: Start BLE provisioning window (60 seconds)
-  startBLE();
-
-  // Step 3: Connect to WiFi
-  connectWiFi();
-
-  // Step 4: Sync time via NTP
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  Serial.println("[NTP] Synchronizing RTC with time server...");
-
-  // Step 5: Setup MQTT
-  netClient.setInsecure(); // Use setCACert() for production security
-  mqttClient.setServer(cfg_mqtt_host, mqtt_port);
-  mqttClient.setCallback(mqttMessageReceived);
-  connectMQTT();
+  // Boot directly to WiFi and MQTT mode
+  initWiFiAndMQTT();
+  Serial.println("[Setup] System running in WiFi mode. Touch GPIO12 (T5) to activate BLE setup.");
 }
 
 // ==========================================
 // MAIN LOOP
 // ==========================================
 void loop() {
-  // Stop BLE advertising after timeout
-  checkBLETimeout();
+  if (bleActive) {
+    // BLE mode is active — handle timeout and connection
+    checkBLETimeout();
+    // Blink LED rapidly in BLE mode
+    digitalWrite(STATUS_LED, (millis() / 150) % 2);
+    delay(10);
+    return;
+  }
+
+  // Normal WiFi/MQTT mode
+  if (!wifiMqttReady) {
+    initWiFiAndMQTT();
+  }
+
+  // Check touch sensor to trigger BLE configuration mode
+  if (checkTouchTrigger()) {
+    startBLEMode();
+    return;
+  }
 
   // Maintain MQTT connection
   if (!mqttClient.connected()) {
@@ -441,3 +547,4 @@ void loop() {
     publishTelemetry();
   }
 }
+

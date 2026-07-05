@@ -1,27 +1,21 @@
 import React from 'react';
-import { ShieldCheck, Cpu } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
 
-interface FooterProps {
-  mqttConnected: boolean;
-}
-
-export const Footer: React.FC<FooterProps> = ({ mqttConnected }) => {
+export const Footer: React.FC = () => {
   return (
-    <footer className="mt-auto py-6 px-6 border-t border-slate-200 dark:border-slate-800/50 flex flex-col sm:flex-row justify-between items-center text-xs text-slate-500 dark:text-slate-400 bg-white/50 dark:bg-slate-950/30 transition-colors duration-300">
-      <div className="flex items-center gap-2 mb-3 sm:mb-0">
-        <ShieldCheck className="w-4 h-4 text-cyan-500" />
-        <span>Secured SSL Broker Direct Connection</span>
+    <footer className="py-5 px-6 border-t border-slate-200/60 dark:border-slate-800/40 flex flex-col sm:flex-row justify-between items-center text-[10px] font-bold text-slate-400 dark:text-slate-500 bg-white/30 dark:bg-slate-950/20 transition-colors duration-300">
+      <div className="flex items-center gap-2 mb-2.5 sm:mb-0">
+        <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+        <span className="uppercase tracking-wider">Secured Broker Connection</span>
       </div>
       
-      <div className="flex items-center gap-4">
-        <div className="flex items-center gap-1.5">
-          <Cpu className={`w-3.5 h-3.5 ${mqttConnected ? 'text-emerald-500' : 'text-slate-400 animate-pulse'}`} />
-          <span>MQTT Client Service v1.0</span>
-        </div>
-        <span className="text-slate-300 dark:text-slate-800">|</span>
-        <span>© {new Date().getFullYear()} <span className="font-bold bg-gradient-to-r from-violet-500 to-indigo-400 bg-clip-text text-transparent">OhmNest</span> · Feed Me IoT</span>
+      <div className="flex items-center gap-2">
+        <span className="uppercase tracking-wider">
+          © {new Date().getFullYear()} OhmNest · FishFeeder Pro v3.0
+        </span>
       </div>
     </footer>
   );
 };
+
 export default Footer;

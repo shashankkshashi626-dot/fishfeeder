@@ -1,72 +1,128 @@
-import React, { useState, useEffect } from 'react';
-import { Sun, Moon, Settings, Fish } from 'lucide-react';
+import React, { useState } from 'react';
+import { useAuth } from './AuthContext';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { Fish, Settings, User, Edit2, Check, RefreshCw } from 'lucide-react';
 
 interface HeaderProps {
-  darkMode: boolean;
-  setDarkMode: (dark: boolean) => void;
-  onSettingsClick: () => void;
+  espOnline: boolean | null;
+  mqttConnected: boolean;
 }
 
-export const Header: React.FC<HeaderProps> = ({ darkMode, setDarkMode, onSettingsClick }) => {
-  const [time, setTime] = useState<string>('');
+export const Header: React.FC<HeaderProps> = ({ espOnline, mqttConnected }) => {
+  const { user, updateAquariumName } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState(user?.aquariumName || 'My Aquarium');
 
-  // Update clock every second
-  useEffect(() => {
-    const updateTime = () => {
-      const now = new Date();
-      setTime(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-    };
-    updateTime();
-    const timer = setInterval(updateTime, 1000);
-    return () => clearInterval(timer);
-  }, []);
+  const handleSaveName = async () => {
+    if (editName.trim()) {
+      await updateAquariumName(editName.trim());
+      setIsEditing(false);
+    }
+  };
+
+  const isSettings = location.pathname === '/settings';
 
   return (
-    <header className="flex flex-col sm:flex-row justify-between items-center py-5 px-6 border-b border-slate-200 dark:border-slate-800/50 backdrop-blur-md sticky top-0 z-40 transition-colors duration-300 bg-white/70 dark:bg-slate-950/70">
-      {/* Brand Logo & Name */}
-      <div className="flex items-center gap-3 mb-4 sm:mb-0">
-        <div className="w-10 h-10 bg-gradient-to-tr from-cyan-500 to-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-cyan-500/20 dark:shadow-cyan-500/10">
-          <Fish className="w-5 h-5 text-white animate-pulse" />
+    <header className="flex justify-between items-center py-4 px-6 border-b border-slate-200/60 dark:border-slate-800/40 backdrop-blur-xl sticky top-0 z-40 bg-white/70 dark:bg-slate-950/65 transition-colors duration-300">
+      
+      {/* Brand & Editable Aquarium Name */}
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 bg-gradient-to-tr from-cyan-400 to-blue-500 rounded-xl flex items-center justify-center shadow-lg shadow-cyan-500/25 shrink-0">
+          <Fish className="w-5.5 h-5.5 text-white animate-pulse" />
         </div>
-        <div>
+        
+        <div className="flex flex-col">
           <div className="flex items-center gap-2">
-            <h1 className="text-xl font-bold tracking-tight bg-gradient-to-r from-slate-900 to-slate-700 dark:from-white dark:to-cyan-100 bg-clip-text text-transparent">
-              Feed Me
-            </h1>
-            <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold tracking-widest uppercase bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-md shadow-violet-500/20">
-              OhmNest
+            {isEditing ? (
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSaveName()}
+                  className="px-2 py-0.5 text-sm font-bold text-slate-800 dark:text-white bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-md focus:outline-none focus:border-cyan-400 w-36"
+                  autoFocus
+                />
+                <button onClick={handleSaveName} className="p-1 text-emerald-500 hover:text-emerald-600">
+                  <Check className="w-4 h-4" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 group">
+                <h1 className="text-base font-extrabold text-slate-800 dark:text-white leading-none">
+                  {user?.aquariumName || 'My Aquarium'}
+                </h1>
+                <button 
+                  onClick={() => {
+                    setEditName(user?.aquariumName || 'My Aquarium');
+                    setIsEditing(true);
+                  }}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 text-slate-400 hover:text-cyan-400"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {/* Online / Offline status badge */}
+            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wider select-none ${
+              espOnline 
+                ? 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400' 
+                : 'bg-rose-500/10 text-rose-500 dark:text-rose-400 animate-pulse'
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${espOnline ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+              {espOnline ? 'Online' : 'Offline'}
             </span>
           </div>
-          <p className="text-[10px] text-slate-500 dark:text-slate-400 font-medium tracking-wider uppercase">Powered by OhmNest · IoT Console</p>
+          <span className="text-[10px] font-bold tracking-wider text-slate-400 uppercase leading-none mt-1">
+            FishFeeder Pro Console
+          </span>
         </div>
       </div>
 
       {/* Navigation Controls */}
-      <div className="flex items-center gap-4">
-        {/* Clock */}
-        <div className="px-3.5 py-1.5 rounded-full bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 font-mono tracking-wider tabular-nums">
-          {time || 'Initializing...'}
-        </div>
+      <div className="flex items-center gap-3">
+        {/* MQTT Connection Status Indicator (compact) */}
+        <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border flex items-center gap-1.5 ${
+          mqttConnected 
+            ? 'border-emerald-500/30 text-emerald-500 bg-emerald-500/5' 
+            : 'border-rose-500/30 text-rose-500 bg-rose-500/5 animate-pulse'
+        }`}>
+          <RefreshCw className={`w-3 h-3 ${mqttConnected ? '' : 'animate-spin'}`} />
+          <span className="hidden sm:inline">MQTT:</span> {mqttConnected ? 'Connected' : 'Offline'}
+        </span>
 
-        {/* Theme Toggle Button */}
+        {/* Settings Toggle */}
         <button
-          onClick={() => setDarkMode(!darkMode)}
-          className="w-9 h-9 rounded-xl flex items-center justify-center border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-900 active:scale-95 transition-all duration-200"
-          aria-label="Toggle Theme"
+          onClick={() => navigate('/settings')}
+          className={`w-9 h-9 rounded-xl flex items-center justify-center border transition-all duration-200 ${
+            isSettings 
+              ? 'border-cyan-500 bg-cyan-500/10 text-cyan-400' 
+              : 'border-slate-200 dark:border-slate-800 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-900'
+          }`}
+          aria-label="Settings"
         >
-          {darkMode ? <Sun className="w-4 h-4 text-cyan-400" /> : <Moon className="w-4 h-4 text-slate-700" />}
+          <Settings className="w-4.5 h-4.5" />
         </button>
 
-        {/* Settings Trigger */}
+        {/* Profile / Account Toggle */}
         <button
-          onClick={onSettingsClick}
-          className="w-9 h-9 rounded-xl flex items-center justify-center border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-900 active:rotate-45 active:scale-95 transition-all duration-300"
-          aria-label="Configure MQTT"
+          onClick={() => navigate('/settings#account')}
+          className="w-9 h-9 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 flex items-center justify-center hover:opacity-85 transition-opacity"
+          aria-label="Account Profile"
         >
-          <Settings className="w-4 h-4" />
+          {user?.photoURL ? (
+            <img src={user.photoURL} alt="Profile" className="w-full h-full object-cover" />
+          ) : (
+            <User className="w-4.5 h-4.5 text-slate-400" />
+          )}
         </button>
       </div>
+
     </header>
   );
 };
+
 export default Header;
