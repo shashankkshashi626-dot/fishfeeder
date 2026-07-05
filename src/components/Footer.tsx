@@ -19,7 +19,7 @@ export const Footer: React.FC<FooterProps> = ({ mqttConnected }) => {
           <span>MQTT Client Service v1.0</span>
         </div>
         <span className="text-slate-300 dark:text-slate-800">|</span>
-        <span>© {new Date().getFullYear()} FishFeeder Commercial IoT</span>
+        <span>© {new Date().getFullYear()} <span className="font-bold bg-gradient-to-r from-violet-500 to-indigo-400 bg-clip-text text-transparent">OhmNest</span> · Feed Me IoT</span>
       </div>
     </footer>
   );

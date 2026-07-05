@@ -1,24 +1,34 @@
 /**
  * FishFeeder v2.0 - ESP32 Firmware Sketch
  * 
- * This firmware connects an ESP32 micro-controller directly to HiveMQ Cloud MQTT Broker
- * over a secure TLS connection (port 8883). It subscribes to feed commands, 
- * controls the dispenser servo, and publishes real-time sensor telemetry.
+ * Features:
+ *  - BLE Provisioning: Receive WiFi + MQTT credentials wirelessly from Android app
+ *  - Credentials persist to flash (Preferences NVS) — survives reboots
+ *  - HiveMQ Cloud TLS MQTT connection for telemetry and servo control
+ *  - DS18B20 water temp, food level, water level, battery, power source sensors
  * 
  * Hardware Connections:
  *  - Dispenser Servo Signal Pin: GPIO 25
  *  - DS18B20 Temp Sensor: GPIO 32 (Requires 4.7k pullup resistor to 3.3V)
  *  - Water Level Switch Pin: GPIO 33 (Digital input, active low with pullup)
- *  - Food Level Sensor Pin: GPIO 34 (Analog input - e.g., IR/distance sensor)
+ *  - Food Level Sensor Pin: GPIO 34 (Analog input - IR/distance sensor)
  *  - Battery Voltage Pin: GPIO 35 (Analog input - through voltage divider)
  *  - USB/Adapter Power Sense: GPIO 26 (Digital input - VBUS sense)
  *  - Status LED: GPIO 2 (Built-in LED)
+ * 
+ * BLE Setup:
+ *  - Advertises as "FeedMe-Setup" for 60s after boot
+ *  - Send JSON via BLE to update credentials without re-flashing
+ *  - Service UUID:        4fafc201-1fb5-459e-8fcc-c5c9c331914b
+ *  - Characteristic UUID: beb5483e-36e1-4688-b7f5-ea07361b26a8
  * 
  * Library Dependencies (Install via Arduino Library Manager):
  *  - PubSubClient (by Nick O'Leary)
  *  - OneWire (by Paul Stoffregen)
  *  - DallasTemperature (by Miles Burton)
  *  - ESP32Servo (by John K. Bennett)
+ *  - ArduinoJson (by Benoit Blanchon)  <-- NEW
+ *  BLEDevice, Preferences are built into ESP32 Arduino core
  */
 
 #include <WiFi.h>
@@ -27,25 +37,49 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <ESP32Servo.h>
+#include <Preferences.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+#include <ArduinoJson.h>
 #include "time.h"
 
 // ==========================================
-// CONFIGURATIONS - UPDATE THESE DETAILS
+// BLE CONFIGURATION
 // ==========================================
-const char* ssid = "Homies";
-const char* password = "Act@2026*";
+#define BLE_SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define BLE_CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+#define BLE_DEVICE_NAME         "OhmNest"
+#define BLE_TIMEOUT_MS          60000   // BLE advertises for 60 seconds after boot
 
-// HiveMQ Cloud details (e.g. xxxxx.s1.eu.hivemq.cloud)
-// Do NOT include "wss://" or ports in the host string.
-const char* mqtt_host = "0996b9bcc0b44d5599eaaf687e45ea8e.s1.eu.hivemq.cloud"; 
-const int mqtt_port = 8883; // Secure MQTT TLS Port
-const char* mqtt_user = "fishuser";
-const char* mqtt_pass = "Fish@123456";
+// ==========================================
+// PREFERENCES (FLASH STORAGE) NAMESPACE
+// ==========================================
+#define PREFS_NS "feedme_creds"
 
-// Time Zone offset (seconds). Example: UTC+5:30 = 5.5 * 3600 = 19800
-const long gmtOffset_sec = 19800; 
-const int daylightOffset_sec = 0;
-const char* ntpServer = "pool.ntp.org";
+// ==========================================
+// HARDCODED DEFAULT CREDENTIALS
+// (Used only if no credentials are saved in flash)
+// ==========================================
+#define DEFAULT_SSID       "Homies"
+#define DEFAULT_WIFIPASS   "Act@2026*"
+#define DEFAULT_MQTT_HOST  "0996b9bcc0b44d5599eaaf687e45ea8e.s1.eu.hivemq.cloud"
+#define DEFAULT_MQTT_USER  "fishuser"
+#define DEFAULT_MQTT_PASS  "Fish@123456"
+
+// Active credential buffers (loaded from flash at boot)
+char cfg_ssid[64];
+char cfg_wifipass[64];
+char cfg_mqtt_host[128];
+char cfg_mqtt_user[64];
+char cfg_mqtt_pass[64];
+
+// Time Zone (UTC+5:30 for India)
+const long  gmtOffset_sec     = 19800;
+const int   daylightOffset_sec = 0;
+const char* ntpServer          = "pool.ntp.org";
+const int   mqtt_port          = 8883;
 
 // Pin Allocations
 #define STATUS_LED     2
@@ -56,73 +90,157 @@ const char* ntpServer = "pool.ntp.org";
 #define FOOD_LVL_PIN   34
 #define BATT_SENSE     35
 
-// MQTT Client & SSL Network Connections
+// Hardware instances
 WiFiClientSecure netClient;
-PubSubClient mqttClient(netClient);
-
-// Hardware Instances
-OneWire oneWire(TEMP_PIN);
+PubSubClient     mqttClient(netClient);
+OneWire          oneWire(TEMP_PIN);
 DallasTemperature tempSensors(&oneWire);
-Servo feederServo;
+Servo            feederServo;
+Preferences      prefs;
 
-// Local Session Metrics
-int todayFeedCount = 0;
-String lastFeedTimeStr = "No Data Received";
+// BLE instances
+BLEServer*         pServer         = nullptr;
+BLECharacteristic* pCharacteristic = nullptr;
+bool               bleActive       = false;
+unsigned long      bleStartTime    = 0;
+
+// Session metrics
+int           todayFeedCount      = 0;
+String        lastFeedTimeStr     = "No Data Received";
 unsigned long lastTelemetryPublish = 0;
-const unsigned long telemetryInterval = 6000; // Publish sensors every 6 seconds
+const unsigned long telemetryInterval = 6000;
 
 // ==========================================
-// SETUP ENTRYPOINT
+// LOAD CREDENTIALS FROM FLASH
+// Falls back to hardcoded defaults if empty
 // ==========================================
-void setup() {
-  Serial.begin(115200);
-  delay(1000);
-  Serial.println("\nInitializing FishFeeder v2.0...");
+void loadCredentials() {
+  prefs.begin(PREFS_NS, true); // read-only
 
-  // Setup pin modes
-  pinMode(STATUS_LED, OUTPUT);
-  pinMode(WATER_LVL_PIN, INPUT_PULLUP);
-  pinMode(POWER_SENSE, INPUT);
-  digitalWrite(STATUS_LED, LOW);
+  String s_ssid  = prefs.getString("ssid",      DEFAULT_SSID);
+  String s_pass  = prefs.getString("wifipass",  DEFAULT_WIFIPASS);
+  String s_host  = prefs.getString("mqttHost",  DEFAULT_MQTT_HOST);
+  String s_user  = prefs.getString("mqttUser",  DEFAULT_MQTT_USER);
+  String s_mpass = prefs.getString("mqttPass",  DEFAULT_MQTT_PASS);
+  prefs.end();
 
-  // Initialize sensors
-  tempSensors.begin();
+  s_ssid.toCharArray(cfg_ssid,      sizeof(cfg_ssid));
+  s_pass.toCharArray(cfg_wifipass,  sizeof(cfg_wifipass));
+  s_host.toCharArray(cfg_mqtt_host, sizeof(cfg_mqtt_host));
+  s_user.toCharArray(cfg_mqtt_user, sizeof(cfg_mqtt_user));
+  s_mpass.toCharArray(cfg_mqtt_pass, sizeof(cfg_mqtt_pass));
 
-  // Initialize WiFi connection
-  connectWiFi();
-
-  // Configure NTP real-time clock syncing
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  Serial.println("Synchronizing local RTC with NTP server...");
-
-  // Configure Secure SSL Network Settings
-  // Note: For convenience in dev, we use setInsecure() to bypass checking the specific root CA.
-  // In production, load the HiveMQ Let's Encrypt Root Certificate into netClient using netClient.setCACert(cert).
-  netClient.setInsecure();
-
-  // Setup MQTT settings
-  mqttClient.setServer(mqtt_host, mqtt_port);
-  mqttClient.setCallback(mqttMessageReceived);
-  
-  // Connect to MQTT Broker
-  connectMQTT();
+  Serial.println("\n[Credentials] Loaded from flash:");
+  Serial.printf("  WiFi SSID : %s\n", cfg_ssid);
+  Serial.printf("  MQTT Host : %s\n", cfg_mqtt_host);
+  Serial.printf("  MQTT User : %s\n", cfg_mqtt_user);
 }
 
 // ==========================================
-// LOOP COORDINATOR
+// BLE GATT CALLBACK — receives JSON credentials
 // ==========================================
-void loop() {
-  // Re-establish MQTT connection if dropped
-  if (!mqttClient.connected()) {
-    connectMQTT();
-  }
-  mqttClient.loop();
+class ProvisionCallback : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* pChar) override {
+    std::string raw = pChar->getValue();
+    if (raw.length() == 0) return;
 
-  // Periodically read and publish telemetry
-  unsigned long currentMillis = millis();
-  if (currentMillis - lastTelemetryPublish >= telemetryInterval) {
-    lastTelemetryPublish = currentMillis;
-    publishTelemetry();
+    Serial.printf("\n[BLE Rx] Received %d bytes\n", raw.length());
+    Serial.println(raw.c_str());
+
+    // Parse JSON
+    StaticJsonDocument<512> doc;
+    DeserializationError err = deserializeJson(doc, raw.c_str());
+
+    if (err) {
+      Serial.printf("[BLE] JSON parse error: %s\n", err.c_str());
+      pChar->setValue("ERR:Invalid JSON format");
+      pChar->notify();
+      return;
+    }
+
+    // Save each field to flash if present in JSON
+    prefs.begin(PREFS_NS, false); // read-write
+    bool saved = false;
+
+    if (doc.containsKey("ssid") && strlen(doc["ssid"]) > 0) {
+      prefs.putString("ssid", doc["ssid"].as<const char*>());
+      saved = true;
+    }
+    if (doc.containsKey("wifipass")) {
+      prefs.putString("wifipass", doc["wifipass"].as<const char*>());
+      saved = true;
+    }
+    if (doc.containsKey("mqttHost") && strlen(doc["mqttHost"]) > 0) {
+      prefs.putString("mqttHost", doc["mqttHost"].as<const char*>());
+      saved = true;
+    }
+    if (doc.containsKey("mqttUser")) {
+      prefs.putString("mqttUser", doc["mqttUser"].as<const char*>());
+      saved = true;
+    }
+    if (doc.containsKey("mqttPass")) {
+      prefs.putString("mqttPass", doc["mqttPass"].as<const char*>());
+      saved = true;
+    }
+    prefs.end();
+
+    if (saved) {
+      Serial.println("[BLE] Credentials saved to flash! Restarting in 1.5s...");
+      pChar->setValue("OK:Credentials saved. Restarting ESP32...");
+      pChar->notify();
+      delay(1500);
+      ESP.restart();
+    } else {
+      pChar->setValue("ERR:No valid fields found in JSON");
+      pChar->notify();
+    }
+  }
+};
+
+// ==========================================
+// BLE SERVER — starts advertising "FeedMe-Setup"
+// ==========================================
+void startBLE() {
+  BLEDevice::init(BLE_DEVICE_NAME);
+  BLEDevice::setMTU(512);
+
+  pServer = BLEDevice::createServer();
+
+  BLEService* pService = pServer->createService(BLE_SERVICE_UUID);
+
+  pCharacteristic = pService->createCharacteristic(
+    BLE_CHARACTERISTIC_UUID,
+    BLECharacteristic::PROPERTY_WRITE |
+    BLECharacteristic::PROPERTY_NOTIFY
+  );
+  pCharacteristic->addDescriptor(new BLE2902());
+  pCharacteristic->setCallbacks(new ProvisionCallback());
+
+  pService->start();
+
+  BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(BLE_SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06);
+  BLEDevice::startAdvertising();
+
+  bleActive    = true;
+  bleStartTime = millis();
+
+  Serial.printf("[BLE] Advertising as '%s' for %d seconds...\n", BLE_DEVICE_NAME, BLE_TIMEOUT_MS / 1000);
+  Serial.printf("[BLE] Service UUID:        %s\n", BLE_SERVICE_UUID);
+  Serial.printf("[BLE] Characteristic UUID: %s\n", BLE_CHARACTERISTIC_UUID);
+}
+
+// ==========================================
+// BLE TIMEOUT CHECK — stops BLE after 60s to save power
+// ==========================================
+void checkBLETimeout() {
+  if (bleActive && (millis() - bleStartTime > BLE_TIMEOUT_MS)) {
+    BLEDevice::stopAdvertising();
+    bleActive = false;
+    Serial.println("[BLE] Advertising timeout. BLE stopped to save power.");
+    Serial.println("[BLE] Restart ESP32 to enable BLE provisioning again.");
   }
 }
 
@@ -130,31 +248,26 @@ void loop() {
 // WIFI MANAGEMENT
 // ==========================================
 void connectWiFi() {
-  Serial.print("Connecting to Wi-Fi: ");
-  Serial.println(ssid);
-  
-  // Disconnect first to reset any ongoing connection attempt state
+  Serial.printf("\n[WiFi] Connecting to: %s\n", cfg_ssid);
+
   WiFi.disconnect();
   delay(500);
-  
-  WiFi.begin(ssid, password);
+  WiFi.begin(cfg_ssid, cfg_wifipass);
 
   int retries = 0;
-  while (WiFi.status() != WL_CONNECTED && retries < 30) { // 15-second timeout
+  while (WiFi.status() != WL_CONNECTED && retries < 30) {
     delay(500);
     Serial.print(".");
-    digitalWrite(STATUS_LED, !digitalRead(STATUS_LED)); // Blink LED while connecting
+    digitalWrite(STATUS_LED, !digitalRead(STATUS_LED));
     retries++;
   }
-  
+
   if (WiFi.status() == WL_CONNECTED) {
-    digitalWrite(STATUS_LED, HIGH); // LED stays on when Wi-Fi is connected
-    Serial.println("\nWi-Fi connection established!");
-    Serial.print("IP Address: ");
-    Serial.println(WiFi.localIP());
+    digitalWrite(STATUS_LED, HIGH);
+    Serial.printf("\n[WiFi] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
   } else {
     digitalWrite(STATUS_LED, LOW);
-    Serial.println("\nWi-Fi connection timeout! Will retry in next loop cycle.");
+    Serial.println("\n[WiFi] Connection timeout. Will retry...");
   }
 }
 
@@ -163,41 +276,26 @@ void connectWiFi() {
 // ==========================================
 void connectMQTT() {
   while (!mqttClient.connected()) {
-    // If Wi-Fi connection drops, reconnect Wi-Fi first
     if (WiFi.status() != WL_CONNECTED) {
       connectWiFi();
     }
-    
-    Serial.print("Connecting to HiveMQ Cloud MQTT Broker...");
-    
-    // Generate unique client ID
-    String clientId = "esp32_feeder_" + String(random(0xffff), HEX);
-    
-    // MQTT LWT parameters: topic, QoS, retained, message
-    const char* lwtTopic = "fishfeeder/esp/status";
-    const char* lwtMessage = "Offline";
-    boolean lwtRetain = true;
-    int lwtQos = 1;
 
-    // Connect using LWT parameters to publish Offline state if ESP32 drops connection unexpectedly
-    if (mqttClient.connect(clientId.c_str(), mqtt_user, mqtt_pass, lwtTopic, lwtQos, lwtRetain, lwtMessage)) {
-      Serial.println("\nConnected to HiveMQ Cloud!");
-      
-      // Publish "Online" state as a retained message
+    Serial.printf("[MQTT] Connecting to %s...", cfg_mqtt_host);
+
+    String clientId = "esp32_feeder_" + String(random(0xffff), HEX);
+
+    const char* lwtTopic   = "fishfeeder/esp/status";
+    const char* lwtMessage = "Offline";
+
+    if (mqttClient.connect(clientId.c_str(), cfg_mqtt_user, cfg_mqtt_pass,
+                           lwtTopic, 1, true, lwtMessage)) {
+      Serial.println(" Connected!");
       mqttClient.publish("fishfeeder/esp/status", "Online", true);
-      
-      // Subscribe to command topic with QoS 1
       mqttClient.subscribe("fishfeeder/servo/cmd", 1);
-      
-      // Update LED state to show connection success
       digitalWrite(STATUS_LED, HIGH);
-      
-      // Initial telemetry publish immediately on connection
       publishTelemetry();
     } else {
-      Serial.print(" failed, rc=");
-      Serial.print(mqttClient.state());
-      Serial.println(" | Retrying in 5 seconds...");
+      Serial.printf(" failed rc=%d | Retrying in 5s...\n", mqttClient.state());
       digitalWrite(STATUS_LED, LOW);
       delay(5000);
     }
@@ -205,53 +303,35 @@ void connectMQTT() {
 }
 
 // ==========================================
-// MQTT MESSAGE CALLBACK (LISTENERS)
+// MQTT MESSAGE CALLBACK
 // ==========================================
 void mqttMessageReceived(char* topic, byte* payload, unsigned int length) {
-  // Convert payload buffer to a clean string
   String msg = "";
-  for (int i = 0; i < length; i++) {
-    msg += (char)payload[i];
-  }
+  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
   msg.trim();
 
   Serial.printf("\n[MQTT Rx] Topic: %s | Payload: %s\n", topic, msg.c_str());
 
-  if (String(topic) == "fishfeeder/servo/cmd") {
-    if (msg == "FEED") {
-      triggerFeedingCycle();
-    }
+  if (String(topic) == "fishfeeder/servo/cmd" && msg == "FEED") {
+    triggerFeedingCycle();
   }
 }
 
 // ==========================================
-// FEEDING HARDWARE CONTROL ROUTINE
+// FEEDING HARDWARE CONTROL
 // ==========================================
 void triggerFeedingCycle() {
   Serial.println("Dispense cycle requested! Triggering servo sweep...");
-  
-  // 1. Publish "Feeding" status
+
   mqttClient.publish("fishfeeder/servo/status", "Feeding");
 
-  // 2. Attach Servo and perform a clean 0 to 120 degree sweep
   feederServo.attach(SERVO_PIN);
-  
-  // Sweep out to drop food
-  for (int pos = 0; pos <= 120; pos += 4) {
-    feederServo.write(pos);
-    delay(15);
-  }
-  delay(500); // Wait for pellets to drop
-  
-  // Sweep back to home position
-  for (int pos = 120; pos >= 0; pos -= 4) {
-    feederServo.write(pos);
-    delay(15);
-  }
+  for (int pos = 0; pos <= 120; pos += 4) { feederServo.write(pos); delay(15); }
+  delay(500);
+  for (int pos = 120; pos >= 0; pos -= 4) { feederServo.write(pos); delay(15); }
   delay(150);
-  feederServo.detach(); // Detach to save power and eliminate servo jitter
+  feederServo.detach();
 
-  // 3. Get timestamp from local RTC
   struct tm timeinfo;
   if (getLocalTime(&timeinfo)) {
     char timeBuffer[32];
@@ -261,17 +341,11 @@ void triggerFeedingCycle() {
     lastFeedTimeStr = "Time Unavailable";
   }
 
-  // 4. Increment feed count
   todayFeedCount++;
-
-  // 5. Publish Feed confirmation status, timestamp and feed count updates
   mqttClient.publish("fishfeeder/feed/count", String(todayFeedCount).c_str(), true);
-  mqttClient.publish("fishfeeder/feed/time", lastFeedTimeStr.c_str(), true);
+  mqttClient.publish("fishfeeder/feed/time",  lastFeedTimeStr.c_str(), true);
   mqttClient.publish("fishfeeder/servo/status", "Done");
-  
-  Serial.printf("Feeding cycle complete. Last Feed: %s | Count: %d\n", lastFeedTimeStr.c_str(), todayFeedCount);
-  
-  // Return servo status to Waiting after small delay
+  Serial.printf("Feeding complete. Time: %s | Count: %d\n", lastFeedTimeStr.c_str(), todayFeedCount);
   delay(1000);
   mqttClient.publish("fishfeeder/servo/status", "Waiting");
 }
@@ -281,14 +355,11 @@ void triggerFeedingCycle() {
 // ==========================================
 void publishTelemetry() {
   if (!mqttClient.connected()) return;
-
   Serial.println("\nSampling sensors and publishing telemetry...");
 
-  // 1. Read WiFi RSSI
   int rssi = WiFi.RSSI();
   mqttClient.publish("fishfeeder/wifi/rssi", String(rssi).c_str(), true);
 
-  // 2. Read DS18B20 Water Temperature
   tempSensors.requestTemperatures();
   float tempC = tempSensors.getTempCByIndex(0);
   if (tempC != DEVICE_DISCONNECTED_C && tempC > -50.0 && tempC < 85.0) {
@@ -297,29 +368,76 @@ void publishTelemetry() {
     Serial.println("Water temp sensor read failed or disconnected.");
   }
 
-  // 3. Read Water Level Digital Switch
-  // Digital pin is pulled high. Switch closed (low) = Normal, Switch open (high) = Low
   String wlStatus = (digitalRead(WATER_LVL_PIN) == LOW) ? "Normal" : "Low";
   mqttClient.publish("fishfeeder/waterlevel", wlStatus.c_str(), true);
 
-  // 4. Read Food Storage Level (Analog Infrared/Distance)
-  // Maps raw analog range (e.g. 4095 = empty/far, 1500 = full/close) to 0-100%
-  int rawFoodLevel = analogRead(FOOD_LVL_PIN);
-  int foodPercent = map(rawFoodLevel, 4095, 1200, 0, 100);
-  foodPercent = constrain(foodPercent, 0, 100);
-  mqttClient.publish("fishfeeder/foodlevel", String(foodPercent).c_str(), true);
+  int rawFood    = analogRead(FOOD_LVL_PIN);
+  int foodPct    = constrain(map(rawFood, 4095, 1200, 0, 100), 0, 100);
+  mqttClient.publish("fishfeeder/foodlevel", String(foodPct).c_str(), true);
 
-  // 5. Read Battery Voltage
-  // Reads analog pin attached to resistor divider (e.g. divider ratio = 2.0)
-  int rawBattery = analogRead(BATT_SENSE);
-  float voltage = rawBattery * (3.3 / 4095.0) * 2.0; // scale based on voltage divider
-  mqttClient.publish("fishfeeder/battery", String(voltage, 2).c_str(), true);
+  int rawBat  = analogRead(BATT_SENSE);
+  float volts = rawBat * (3.3 / 4095.0) * 2.0;
+  mqttClient.publish("fishfeeder/battery", String(volts, 2).c_str(), true);
 
-  // 6. Read Power Source (Sense USB VBUS)
-  // Input High = USB power connection, Input Low = Battery backup power
-  String pSource = (digitalRead(POWER_SENSE) == HIGH) ? "USB" : "Battery";
-  mqttClient.publish("fishfeeder/powersource", pSource.c_str(), true);
+  String pSrc = (digitalRead(POWER_SENSE) == HIGH) ? "USB" : "Battery";
+  mqttClient.publish("fishfeeder/powersource", pSrc.c_str(), true);
 
-  Serial.printf("[Telemetry Tx] RSSI: %d dBm | Temp: %.2fC | Water: %s | Food: %d%% | Batt: %.2fV | Power: %s\n", 
-                rssi, tempC, wlStatus.c_str(), foodPercent, voltage, pSource.c_str());
+  Serial.printf("[Telemetry Tx] RSSI: %d dBm | Temp: %.2fC | Water: %s | Food: %d%% | Batt: %.2fV | Power: %s\n",
+                rssi, tempC, wlStatus.c_str(), foodPct, volts, pSrc.c_str());
+}
+
+// ==========================================
+// SETUP ENTRYPOINT
+// ==========================================
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println("\n=== FishFeeder v2.0 + BLE Provisioning ===");
+
+  // Hardware init
+  pinMode(STATUS_LED,    OUTPUT);
+  pinMode(WATER_LVL_PIN, INPUT_PULLUP);
+  pinMode(POWER_SENSE,   INPUT);
+  digitalWrite(STATUS_LED, LOW);
+  tempSensors.begin();
+
+  // Step 1: Load credentials from flash (or defaults)
+  loadCredentials();
+
+  // Step 2: Start BLE provisioning window (60 seconds)
+  startBLE();
+
+  // Step 3: Connect to WiFi
+  connectWiFi();
+
+  // Step 4: Sync time via NTP
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  Serial.println("[NTP] Synchronizing RTC with time server...");
+
+  // Step 5: Setup MQTT
+  netClient.setInsecure(); // Use setCACert() for production security
+  mqttClient.setServer(cfg_mqtt_host, mqtt_port);
+  mqttClient.setCallback(mqttMessageReceived);
+  connectMQTT();
+}
+
+// ==========================================
+// MAIN LOOP
+// ==========================================
+void loop() {
+  // Stop BLE advertising after timeout
+  checkBLETimeout();
+
+  // Maintain MQTT connection
+  if (!mqttClient.connected()) {
+    connectMQTT();
+  }
+  mqttClient.loop();
+
+  // Periodic telemetry
+  unsigned long now = millis();
+  if (now - lastTelemetryPublish >= telemetryInterval) {
+    lastTelemetryPublish = now;
+    publishTelemetry();
+  }
 }

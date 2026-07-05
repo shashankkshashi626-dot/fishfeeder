@@ -7,6 +7,7 @@ import { SensorCard } from './SensorCard';
 import { ActivityCard } from './ActivityCard';
 import { Camera, Calendar, BarChart3, Scan, Lock, AlertOctagon, Settings2 } from 'lucide-react';
 import { useMQTT } from '../hooks/useMQTT';
+import { BluetoothSetupCard } from './BluetoothSetupCard';
 
 interface DashboardProps {
   showSettings: boolean;
@@ -84,6 +85,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ showSettings, onCloseSetti
         <EspCard espOnline={espOnline} rssi={wifiRssi} />
         <ServoCard status={servoStatus} lastFeedTime={lastFeedTime} feedCount={feedCount} espOnline={espOnline} />
       </section>
+
+      {/* 3. Bluetooth Device Setup Card */}
+      <BluetoothSetupCard />
 
       {/* 3. Action Control & Sensor Dashboard Grid */}
       <section className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
