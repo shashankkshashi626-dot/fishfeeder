@@ -8,7 +8,7 @@ import {
   deleteUser
 } from "firebase/auth";
 import { doc, getDoc, setDoc, updateDoc, deleteDoc } from "firebase/firestore";
-import { auth, db, isRealFirebase } from "../firebase";
+import { auth, db, isRealFirebase, mockNotifyAuthStateChanged } from "../firebase";
 
 interface UserProfile {
   uid: string;
@@ -143,7 +143,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const sessionUser = { uid: matched.uid, email, displayName: matched.name };
       localStorage.setItem("mock_user_session", JSON.stringify(sessionUser));
       // Re-trigger auth listener manually
-      auth.onAuthStateChanged(() => {});
+      if (typeof mockNotifyAuthStateChanged === "function") {
+        mockNotifyAuthStateChanged(sessionUser);
+      }
     }
   };
 
@@ -164,7 +166,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const sessionUser = { uid: newUid, email, displayName: name };
       localStorage.setItem("mock_user_session", JSON.stringify(sessionUser));
       // Re-trigger auth listener manually
-      auth.onAuthStateChanged(() => {});
+      if (typeof mockNotifyAuthStateChanged === "function") {
+        mockNotifyAuthStateChanged(sessionUser);
+      }
     }
   };
 
@@ -174,7 +178,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } else {
       localStorage.removeItem("mock_user_session");
       // Re-trigger auth listener manually
-      auth.onAuthStateChanged(() => {});
+      if (typeof mockNotifyAuthStateChanged === "function") {
+        mockNotifyAuthStateChanged(null);
+      }
     }
     setUser(null);
   };

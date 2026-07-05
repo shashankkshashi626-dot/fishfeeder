@@ -37,21 +37,32 @@ if (isRealFirebase) {
   setupMockFirebase();
 }
 
+const authListeners: Array<(user: any) => void> = [];
+
+export const mockNotifyAuthStateChanged = (user: any) => {
+  auth.currentUser = user;
+  authListeners.forEach(cb => cb(user));
+};
+
 function setupMockFirebase() {
   // Simple mock instances using localStorage
   auth = {
     currentUser: null,
     onAuthStateChanged: (callback: (user: any) => void) => {
-      // Load user session from localStorage
+      authListeners.push(callback);
+      // Immediately call callback with current session status
       const session = localStorage.getItem("mock_user_session");
       const user = session ? JSON.parse(session) : null;
       auth.currentUser = user;
-      
-      // Async trigger to simulate network call
-      setTimeout(() => callback(user), 300);
+      callback(user);
       
       // Return unsubscribe handler
-      return () => {};
+      return () => {
+        const idx = authListeners.indexOf(callback);
+        if (idx !== -1) {
+          authListeners.splice(idx, 1);
+        }
+      };
     }
   };
 
