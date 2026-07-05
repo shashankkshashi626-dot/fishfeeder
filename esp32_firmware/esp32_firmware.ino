@@ -32,8 +32,8 @@
 // ==========================================
 // CONFIGURATIONS - UPDATE THESE DETAILS
 // ==========================================
-const char* ssid = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASSWORD";
+const char* ssid = "Homies";
+const char* password = "Act@2026*";
 
 // HiveMQ Cloud details (e.g. xxxxx.s1.eu.hivemq.cloud)
 // Do NOT include "wss://" or ports in the host string.
@@ -151,6 +151,11 @@ void connectWiFi() {
 // ==========================================
 void connectMQTT() {
   while (!mqttClient.connected()) {
+    // If Wi-Fi connection drops, reconnect Wi-Fi first
+    if (WiFi.status() != WL_CONNECTED) {
+      connectWiFi();
+    }
+    
     Serial.print("Connecting to HiveMQ Cloud MQTT Broker...");
     
     // Generate unique client ID
