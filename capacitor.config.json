@@ -1,0 +1,6 @@
+{
+  "appId": "com.shashankkshashi626.fishfeeder",
+  "appName": "FishFeeder v2.0",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}
