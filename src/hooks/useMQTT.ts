@@ -71,9 +71,19 @@ export const useMQTT = () => {
 
   // Connect & subscribe to topics
   useEffect(() => {
-    const brokerUrl = localStorage.getItem('override_mqtt_url') || import.meta.env.VITE_MQTT_BROKER_URL;
-    const username = localStorage.getItem('override_mqtt_user') || import.meta.env.VITE_MQTT_USERNAME;
-    const password = localStorage.getItem('override_mqtt_pass') || import.meta.env.VITE_MQTT_PASSWORD;
+    const cleanString = (str: string | null | undefined): string | undefined => {
+      if (!str) return undefined;
+      let cleaned = str.trim();
+      if ((cleaned.startsWith('"') && cleaned.endsWith('"')) || 
+          (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+        cleaned = cleaned.substring(1, cleaned.length - 1).trim();
+      }
+      return cleaned;
+    };
+
+    const brokerUrl = cleanString(localStorage.getItem('override_mqtt_url') || import.meta.env.VITE_MQTT_BROKER_URL);
+    const username = cleanString(localStorage.getItem('override_mqtt_user') || import.meta.env.VITE_MQTT_USERNAME);
+    const password = cleanString(localStorage.getItem('override_mqtt_pass') || import.meta.env.VITE_MQTT_PASSWORD);
 
     if (!brokerUrl) {
       console.warn("MQTT URL (VITE_MQTT_BROKER_URL) is missing. Check .env configurations.");
