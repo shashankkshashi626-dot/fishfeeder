@@ -1,5 +1,5 @@
 import React from 'react';
-import { Thermometer, Droplets, Battery, Zap, Package, Sparkles } from 'lucide-react';
+import { Thermometer, Droplets, Battery, Zap, Package, Sparkles, Calendar, Clock } from 'lucide-react';
 
 interface SensorCardProps {
   foodLevel: number | null;
@@ -8,6 +8,8 @@ interface SensorCardProps {
   batteryVoltage: number | null;
   powerSource: 'Battery' | 'USB' | 'DC Adapter' | null;
   espOnline: boolean | null;
+  feedCount: number | null;
+  lastFeedTime: string | null;
 }
 
 export const SensorCard: React.FC<SensorCardProps> = ({
@@ -16,7 +18,9 @@ export const SensorCard: React.FC<SensorCardProps> = ({
   waterLevel,
   batteryVoltage,
   powerSource,
-  espOnline
+  espOnline,
+  feedCount,
+  lastFeedTime
 }) => {
   const isOnline = espOnline === true;
 
@@ -90,6 +94,34 @@ export const SensorCard: React.FC<SensorCardProps> = ({
               <div className="text-slate-400 dark:text-slate-500 text-xs font-semibold py-1">
                 {isOnline ? 'No Data Received' : 'Waiting for ESP32...'}
               </div>
+            )}
+          </div>
+        </div>
+
+        {/* Daily Feedings (New) */}
+        <div className="p-4 rounded-2xl border border-slate-100 dark:border-slate-800/80 bg-white/20 dark:bg-slate-950/20 flex flex-col gap-2">
+          <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+            <Calendar className="w-4 h-4 text-cyan-400" />
+            <span className="text-xs font-bold uppercase tracking-wider">Feeds Today</span>
+          </div>
+          <div className="flex items-baseline gap-1 mt-1">
+            {renderValue(feedCount, ' times')}
+          </div>
+        </div>
+
+        {/* Last Feeding Time (New) */}
+        <div className="p-4 rounded-2xl border border-slate-100 dark:border-slate-800/80 bg-white/20 dark:bg-slate-950/20 flex flex-col gap-2">
+          <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+            <Clock className="w-4 h-4 text-cyan-400" />
+            <span className="text-xs font-bold uppercase tracking-wider">Last Feed</span>
+          </div>
+          <div className="flex items-baseline gap-1 mt-1">
+            {isOnline ? (
+              <span className="text-sm font-bold text-slate-800 dark:text-white leading-tight">
+                {lastFeedTime || 'No Data'}
+              </span>
+            ) : (
+              <span className="text-xs font-semibold text-slate-400 dark:text-slate-500">Waiting for ESP32...</span>
             )}
           </div>
         </div>

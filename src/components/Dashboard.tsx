@@ -1,7 +1,4 @@
 import React from 'react';
-import { ConnectionCard } from './ConnectionCard';
-import { EspCard } from './EspCard';
-import { ServoCard } from './ServoCard';
 import { FeedButton } from './FeedButton';
 import { SensorCard } from './SensorCard';
 import { ActivityCard } from './ActivityCard';
@@ -16,9 +13,7 @@ interface DashboardProps {
 export const Dashboard: React.FC<DashboardProps> = ({ mqttState }) => {
   const {
     mqttConnected,
-    mqttError,
     espOnline,
-    wifiRssi,
     servoStatus,
     lastFeedTime,
     feedCount,
@@ -47,17 +42,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ mqttState }) => {
         </div>
       )}
 
-      {/* 2. System Status Grid */}
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <ConnectionCard connected={mqttConnected} error={mqttError} />
-        <EspCard espOnline={espOnline} rssi={wifiRssi} />
-        <ServoCard status={servoStatus} lastFeedTime={lastFeedTime} feedCount={feedCount} espOnline={espOnline} />
-      </section>
-
-      {/* 3. Bluetooth Device Setup Card */}
+      {/* 2. Bluetooth Device Setup Card */}
       <BluetoothSetupCard />
 
-      {/* 4. Action Control & Sensor Dashboard Grid */}
+      {/* 3. Action Control & Sensor Dashboard Grid */}
       <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left Column: Feed Trigger Panel */}
         <div className="lg:col-span-5 h-full">
@@ -78,6 +66,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ mqttState }) => {
             batteryVoltage={batteryVoltage} 
             powerSource={powerSource} 
             espOnline={espOnline}
+            feedCount={feedCount}
+            lastFeedTime={lastFeedTime}
           />
         </div>
       </section>
