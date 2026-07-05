@@ -10,6 +10,7 @@ import ServoWidget from "./Widgets/ServoWidget";
 import SensorWidget from "./Widgets/SensorWidget";
 import FeedButton from "./FeedButton";
 import WidgetSelector from "./WidgetSelector";
+import { BluetoothSetupCard } from "./BluetoothSetupCard";
 
 interface DashboardProps {
   mqttState: ReturnType<typeof useMQTT>;
@@ -123,6 +124,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ mqttState }) => {
           </div>
         </div>
       )}
+
+      {/* Bluetooth Device Setup Card */}
+      <BluetoothSetupCard />
 
       {/* Grid of Draggable and Resizable Widgets */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">

@@ -116,6 +116,30 @@ String        lastFeedTimeStr     = "No Data Received";
 unsigned long lastTelemetryPublish = 0;
 const unsigned long telemetryInterval = 6000;
 
+String cleanMQTTpHost(String host) {
+  host.trim();
+  if (host.startsWith("wss://")) {
+    host = host.substring(6);
+  } else if (host.startsWith("ws://")) {
+    host = host.substring(5);
+  }
+  
+  // Remove port if present (e.g. :8884)
+  int colonIdx = host.indexOf(':');
+  if (colonIdx != -1) {
+    host = host.substring(0, colonIdx);
+  }
+  
+  // Remove trailing path if present (e.g. /mqtt)
+  int slashIdx = host.indexOf('/');
+  if (slashIdx != -1) {
+    host = host.substring(0, slashIdx);
+  }
+  
+  host.trim();
+  return host;
+}
+
 // ==========================================
 // LOAD CREDENTIALS FROM FLASH
 // Falls back to hardcoded defaults if empty
@@ -135,6 +159,9 @@ void loadCredentials() {
   s_host.trim();
   s_user.trim();
   s_mpass.trim();
+
+  // Clean the host from WebSocket formats (wss://...:8884/mqtt) to raw domain
+  s_host = cleanMQTTpHost(s_host);
 
   s_ssid.toCharArray(cfg_ssid,      sizeof(cfg_ssid));
   s_pass.toCharArray(cfg_wifipass,  sizeof(cfg_wifipass));
